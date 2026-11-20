@@ -1,18 +1,28 @@
-import ApplicationLogo from '@/Components/ApplicationLogo';
-import { Link } from '@inertiajs/react';
+import { GraduationCap } from 'lucide-react';
+import { Toaster } from 'sonner';
 
-export default function GuestLayout({ children }) {
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+
+/** Props: title, description (optional), children */
+export default function GuestLayout({ title, description, children }) {
     return (
-        <div className="flex min-h-screen flex-col items-center bg-gray-100 pt-6 sm:justify-center sm:pt-0">
-            <div>
-                <Link href="/">
-                    <ApplicationLogo className="h-20 w-20 fill-current text-gray-500" />
-                </Link>
+        <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4 py-10">
+            <div className="mb-6 flex items-center gap-3">
+                <div className="flex size-11 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+                    <GraduationCap className="size-6" aria-hidden />
+                </div>
+                <span className="text-lg font-semibold">Personal Teacher Assistant</span>
             </div>
 
-            <div className="mt-6 w-full overflow-hidden bg-white px-6 py-4 shadow-md sm:max-w-md sm:rounded-lg">
-                {children}
-            </div>
+            <Card className="w-full max-w-md">
+                <CardHeader>
+                    <CardTitle className="text-xl">{title}</CardTitle>
+                    {description && <CardDescription>{description}</CardDescription>}
+                </CardHeader>
+                <CardContent>{children}</CardContent>
+            </Card>
+
+            <Toaster richColors position="top-right" />
         </div>
     );
 }

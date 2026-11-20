@@ -6,6 +6,18 @@ import { createRoot } from 'react-dom/client';
 
 const appName = import.meta.env.VITE_APP_NAME || 'Laravel';
 
+function hideAppLoader() {
+    const loader = document.getElementById('app-loader');
+    if (!loader) return;
+
+    requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+            loader.classList.add('is-hidden');
+            loader.addEventListener('transitionend', () => loader.remove(), { once: true });
+        }),
+    );
+}
+
 createInertiaApp({
     title: (title) => `${title} - ${appName}`,
     resolve: (name) =>
@@ -17,6 +29,7 @@ createInertiaApp({
         const root = createRoot(el);
 
         root.render(<App {...props} />);
+        hideAppLoader();
     },
     progress: {
         color: '#4B5563',

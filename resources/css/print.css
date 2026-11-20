@@ -1,0 +1,12 @@
+/* Add to the bottom of resources/css/app.css so the timetable prints cleanly. */
+@media print {
+    @page { size: landscape; margin: 12mm; }
+
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+    aside,
+    header.sticky { display: none !important; }   /* sidebar + top bar from AppLayout */
+
+    .lg\:pl-56 { padding-left: 0 !important; }
+    body { background: #fff !important; }
+}

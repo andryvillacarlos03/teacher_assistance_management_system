@@ -1,0 +1,47 @@
+
+@layer base {
+  :root {
+    --background: 210 40% 98%;        /* Page Background  #F8FAFC */
+    --foreground: 210 54% 20%;        /* Primary Navy     #17324D */
+
+    --card: 0 0% 100%;                /* Surface White    #FFFFFF */
+    --card-foreground: 210 54% 20%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 54% 20%;
+
+    --primary: 175 54% 31%;           /* Teal             #247A73 */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 169 31% 93%;         /* Soft Mint        #E8F3F1 */
+    --secondary-foreground: 210 54% 20%;
+
+    --muted: 169 31% 93%;
+    --muted-foreground: 212 16% 45%;  /* Text Gray        #607184 */
+
+    --accent: 169 31% 93%;
+    --accent-foreground: 210 54% 20%;
+
+    --destructive: 0 50% 55%;         /* Danger           #C65353 */
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 210 26% 88%;            /* Border Gray      #D8E0E8 */
+    --input: 210 26% 88%;
+    --ring: 175 54% 31%;
+    --radius: 0.5rem;
+
+    /* status colours */
+    --success: 155 50% 36%;           /* #2E8B65 */
+    --warning: 37 64% 47%;            /* #C58A2B */
+    --due-soon: 40 73% 63%;           /* #E6B85C */
+
+    /* sidebar */
+    --sidebar: 210 54% 20%;
+    --sidebar-foreground: 0 0% 100%;
+  }
+
+  body { @apply bg-background text-foreground; font-family: 'Inter', system-ui, sans-serif; font-size: 15px; }
+}
+
+@layer components {
+  .app-sidebar { background: hsl(var(--sidebar)); color: hsl(var(--sidebar-foreground)); }
+}
