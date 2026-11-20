@@ -15,12 +15,6 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 
-/*
- * Theme (hex values are used directly so the layout never depends on CSS variables):
- *  Navy #17324D  | Teal #247A73 | Mint #E8F3F1 | Background #F8FAFC
- *  Border #D8E0E8 | Text gray #607184 | Warm accent #E6B85C | Danger #C65353
- */
-
 const mainNav = [
     { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
     { label: 'Schedule', href: '/schedule', icon: CalendarDays },

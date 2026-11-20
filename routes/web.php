@@ -5,23 +5,17 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 use App\Models\User;
-use Illuminate\Support\Facades\Schema;
 
 Route::get('/', function () {
-    try {
-        $hasUsers = Schema::hasTable('users') && User::exists();
-    } catch (\Throwable $e) {
-        report($e);
-        $hasUsers = false;
-    }
 
-    if (! $hasUsers) {
-        return redirect()->route('register');
+    if(User::exists()) {
+       return redirect()->route('register');
     }
 
     return Auth::check()
         ? redirect()->route('dashboard')
         : redirect()->route('login');
+        
 })->name('entry');
 
 Route::middleware(['auth'])->group(function () {
