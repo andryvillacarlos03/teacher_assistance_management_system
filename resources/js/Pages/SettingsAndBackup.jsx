@@ -1,4 +1,4 @@
-import { Head, Link } from '@inertiajs/react';
+import { Head, Link, router, usePage } from '@inertiajs/react';
 import {
     AlertTriangle, ArrowRight, Check, Database, Download, FolderOpen, HardDrive, Loader2,
     Lock, Pencil, Plus, RotateCcw, ShieldCheck, Trash2, Upload,
@@ -12,14 +12,28 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+// Sample data is now used ONLY by the Profile & preferences and Backup & restore tabs.
 import {
-    backupFileName, initialBackups, initialLevels, initialPeriods, initialPreferences,
-    initialProfile, initialSections, initialSubjects, initialYears, storageUsage,
+    backupFileName, initialBackups, initialPreferences, initialProfile, storageUsage,
 } from '@/data/settingsSample';
 import AppLayout from '@/layouts/AppLayout';
 
 /* Theme: Navy #17324D | Teal #247A73 | Mint #E8F3F1 | Border #D8E0E8 | Gray #607184
           Warm #E6B85C | Success #2E8B65 | Danger #C65353 */
+
+/* ---------- server routes (change them here if your route keys differ) ---------- */
+
+const R = {
+    year:     (y)    => (y ? `/settings/academic-years/${y.id}` : '/settings/academic-years'),
+    activate: (y)    => `/settings/academic-years/${y.id}/activate`,
+    periods:  (y, p) => `/settings/academic-years/${y.id}/grading-periods${p ? `/${p.id}` : ''}`,
+    sections: (y, s) => `/settings/academic-years/${y.id}/sections${s ? `/${s.id}` : ''}`,
+    level:    (l)    => (l ? `/settings/grade-levels/${l.id}` : '/settings/grade-levels'),
+    subject:  (s)    => (s ? `/settings/subjects/${s.id}` : '/settings/subjects'),
+};
+
+/* Server field name -> form field id used in the dialogs */
+const FIELD_MAP = { start_date: 'start', end_date: 'end', grade_level_id: 'level' };
 
 /* ---------- helpers ---------- */
 
@@ -102,11 +116,15 @@ function StatTile({ icon: Icon, label, value, hint, tone = '#247A73', toneBg = '
     );
 }
 
-/** Generic add / edit dialog driven by a list of fields. */
-function FormDialog({ open, onOpenChange, title, description, fields, initial, submitLabel = 'Save', validate, onSave }) {
+/**
+ * Generic add / edit dialog driven by a list of fields.
+ * `serverErrors` are validation errors returned by Laravel (already mapped to field ids).
+ */
+function FormDialog({ open, onOpenChange, title, description, fields, initial, submitLabel = 'Save', validate, onSave, serverErrors = {}, processing = false }) {
     const [values, setValues] = useState(() => Object.fromEntries(fields.map((f) => [f.id, initial?.[f.id] ?? ''])));
     const [errors, setErrors] = useState({});
     const set = (k, v) => setValues((x) => ({ ...x, [k]: v }));
+    const errorFor = (id) => errors[id] ?? serverErrors[id];
 
     const submit = (e) => {
         e.preventDefault();
@@ -127,20 +145,25 @@ function FormDialog({ open, onOpenChange, title, description, fields, initial, s
                 </DialogHeader>
                 <form onSubmit={submit} noValidate className="space-y-4">
                     {fields.map((f) => (
-                        <Field key={f.id} id={`fd-${f.id}`} label={f.label} hint={f.hint} error={errors[f.id]}>
+                        <Field key={f.id} id={`fd-${f.id}`} label={f.label} hint={f.hint} error={errorFor(f.id)}>
                             {f.type === 'select' ? (
-                                <select id={`fd-${f.id}`} className={selectCls} value={values[f.id]} onChange={(e) => set(f.id, e.target.value)}>
+                                <select
+                                    id={`fd-${f.id}`} className={selectCls} value={values[f.id]}
+                                    onChange={(e) => set(f.id, f.options.find((o) => String(o.value) === e.target.value)?.value ?? '')}
+                                >
                                     <option value="">Select…</option>
                                     {f.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                                 </select>
                             ) : (
-                                <Input id={`fd-${f.id}`} type={f.type ?? 'text'} value={values[f.id]} placeholder={f.placeholder} onChange={(e) => set(f.id, e.target.value)} className="border-[#D8E0E8]" aria-invalid={!!errors[f.id]} />
+                                <Input id={`fd-${f.id}`} type={f.type ?? 'text'} value={values[f.id]} placeholder={f.placeholder} onChange={(e) => set(f.id, e.target.value)} className="border-[#D8E0E8]" aria-invalid={!!errorFor(f.id)} />
                             )}
                         </Field>
                     ))}
                     <DialogFooter className="gap-2 sm:gap-0">
                         <Button type="button" variant="outline" className="border-[#D8E0E8]" onClick={() => onOpenChange(false)}>Cancel</Button>
-                        <Button type="submit" className="bg-[#247A73] text-white hover:bg-[#1d6560]">{submitLabel}</Button>
+                        <Button type="submit" disabled={processing} className="bg-[#247A73] text-white hover:bg-[#1d6560]">
+                            {processing && <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />}{submitLabel}
+                        </Button>
                     </DialogFooter>
                 </form>
             </DialogContent>
@@ -148,7 +171,7 @@ function FormDialog({ open, onOpenChange, title, description, fields, initial, s
     );
 }
 
-function ConfirmDialog({ open, onOpenChange, title, description, confirmLabel = 'Delete', onConfirm }) {
+function ConfirmDialog({ open, onOpenChange, title, description, confirmLabel = 'Delete', onConfirm, processing = false }) {
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="border-[#D8E0E8] bg-white text-[#17324D] sm:max-w-md">
@@ -158,7 +181,9 @@ function ConfirmDialog({ open, onOpenChange, title, description, confirmLabel = 
                 </DialogHeader>
                 <DialogFooter className="gap-2 sm:gap-0">
                     <Button variant="outline" className="border-[#D8E0E8]" onClick={() => onOpenChange(false)}>Cancel</Button>
-                    <Button onClick={onConfirm} className="bg-[#C65353] text-white hover:bg-[#b04545]">{confirmLabel}</Button>
+                    <Button onClick={onConfirm} disabled={processing} className="bg-[#C65353] text-white hover:bg-[#b04545]">
+                        {processing && <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />}{confirmLabel}
+                    </Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>
@@ -166,7 +191,7 @@ function ConfirmDialog({ open, onOpenChange, title, description, confirmLabel = 
 }
 
 /* =====================================================================
-   TAB 1: PROFILE & PREFERENCES
+   TAB 1: PROFILE & PREFERENCES  (sample data)
    ===================================================================== */
 
 function GeneralTab() {
@@ -309,7 +334,7 @@ function GeneralTab() {
 }
 
 /* =====================================================================
-   TAB 2: ACADEMIC SETUP
+   TAB 2: ACADEMIC SETUP  (real data from SettingsController)
    ===================================================================== */
 
 function RowItem({ title, subtitle, badge, onEdit, onDelete, extra }) {
@@ -328,29 +353,46 @@ function RowItem({ title, subtitle, badge, onEdit, onDelete, extra }) {
     );
 }
 
-function AcademicTab() {
-    const [years, setYears] = useState(initialYears);
-    const [periods, setPeriods] = useState(initialPeriods);
-    const [levels, setLevels] = useState(initialLevels);
-    const [sections, setSections] = useState(initialSections);
-    const [subjects, setSubjects] = useState(initialSubjects);
-    const [yearId, setYearId] = useState(initialYears.find((y) => y.active)?.id ?? initialYears[0].id);
+function AcademicTab({ years, periods, levels, sections, subjects }) {
+    const activeYear = years.find((y) => y.active) ?? years[0];
+    const [selectedId, setSelectedId] = useState(activeYear?.id ?? null);
 
-    const [form, setForm] = useState(null);     // { kind, item, key }
+    const [form, setForm] = useState(null);         // { kind, item, key }
     const [toDelete, setToDelete] = useState(null); // { kind, item }
+    const [serverErrors, setServerErrors] = useState({});
+    const [busy, setBusy] = useState(false);
 
-    const year = years.find((y) => y.id === yearId);
+    // Falls back to the active year if the selected one no longer exists.
+    const year = years.find((y) => y.id === selectedId) ?? activeYear;
+    const yearId = year?.id;
+
     const yearPeriods = (periods[yearId] ?? []).slice().sort((a, b) => a.start.localeCompare(b.start));
     const yearSections = sections.filter((s) => s.year === yearId);
     const levelName = (id) => levels.find((l) => l.id === id)?.name ?? '—';
     const levelOptions = levels.map((l) => ({ value: l.id, label: l.name }));
-    const open = (kind, item = null) => setForm({ kind, item, key: Date.now() });
-    const uid = () => `n${Date.now()}`;
+    const open = (kind, item = null) => { setServerErrors({}); setForm({ kind, item, key: Date.now() }); };
 
-    const setActive = (id) => {
-        setYears((list) => list.map((y) => ({ ...y, active: y.id === id })));
-        toast.success('Active school year changed.');
+    /** Shared request options: keep scroll, then close / clear state. */
+    const reqOpts = (extra = {}) => ({
+        preserveScroll: true,
+        onStart: () => setBusy(true),
+        onFinish: () => setBusy(false),
+        ...extra,
+    });
+
+    /** Turn Laravel errors into dialog field errors; anything else becomes a toast. */
+    const handleErrors = (errs, fieldIds) => {
+        const mapped = {};
+        const rest = [];
+        Object.entries(errs).forEach(([key, msg]) => {
+            const id = FIELD_MAP[key] ?? key;
+            if (fieldIds.includes(id)) mapped[id] = msg; else rest.push(msg);
+        });
+        setServerErrors(mapped);
+        if (rest.length) toast.error(rest[0]);
     };
+
+    const setActive = (y) => router.patch(R.activate(y), {}, reqOpts());
 
     const configs = {
         year: {
@@ -366,9 +408,9 @@ function AcademicTab() {
                 if (years.some((y) => y.id !== form?.item?.id && y.name.toLowerCase() === v.name.toLowerCase())) errs.name = 'This school year already exists.';
                 return errs;
             },
-            save: (v, e) => {
-                if (e) setYears((l) => l.map((y) => (y.id === e.id ? { ...y, ...v } : y)));
-                else { const id = uid(); setYears((l) => [...l, { id, ...v, active: false }]); setPeriods((p) => ({ ...p, [id]: [] })); }
+            save: (v, e, o) => {
+                const data = { name: v.name, start_date: v.start, end_date: v.end };
+                return e ? router.put(R.year(e), data, o) : router.post(R.year(), data, o);
             },
         },
         period: {
@@ -389,16 +431,19 @@ function AcademicTab() {
                 }
                 return errs;
             },
-            save: (v, e) => setPeriods((p) => ({
-                ...p,
-                [yearId]: e ? p[yearId].map((x) => (x.id === e.id ? { ...x, ...v } : x)) : [...(p[yearId] ?? []), { id: uid(), ...v }],
-            })),
+            save: (v, e, o) => {
+                const data = { name: v.name, start_date: v.start, end_date: v.end };
+                return e ? router.put(R.periods(year, e), data, o) : router.post(R.periods(year), data, o);
+            },
         },
         level: {
             title: (e) => (e ? 'Edit grade level' : 'Add grade level'),
             fields: [{ id: 'name', label: 'Name', placeholder: 'Grade 5' }],
             validate: (v) => (levels.some((l) => l.id !== form?.item?.id && l.name.toLowerCase() === v.name.toLowerCase()) ? { name: 'This grade level already exists.' } : {}),
-            save: (v, e) => (e ? setLevels((l) => l.map((x) => (x.id === e.id ? { ...x, ...v } : x))) : setLevels((l) => [...l, { id: uid(), ...v }])),
+            save: (v, e, o) => {
+                const data = { name: v.name };
+                return e ? router.put(R.level(e), data, o) : router.post(R.level(), data, o);
+            },
         },
         section: {
             title: (e) => (e ? 'Edit section' : 'Add section'),
@@ -408,7 +453,10 @@ function AcademicTab() {
                 { id: 'name', label: 'Section name', placeholder: 'Mabini' },
             ],
             validate: (v) => (yearSections.some((s) => s.id !== form?.item?.id && s.level === v.level && s.name.toLowerCase() === v.name.toLowerCase()) ? { name: 'This section already exists for the grade level.' } : {}),
-            save: (v, e) => (e ? setSections((l) => l.map((x) => (x.id === e.id ? { ...x, ...v } : x))) : setSections((l) => [...l, { id: uid(), ...v, year: yearId }])),
+            save: (v, e, o) => {
+                const data = { grade_level_id: v.level, name: v.name };
+                return e ? router.put(R.sections(year, e), data, o) : router.post(R.sections(year), data, o);
+            },
         },
         subject: {
             title: (e) => (e ? 'Edit subject' : 'Add subject'),
@@ -418,15 +466,22 @@ function AcademicTab() {
                 { id: 'code', label: 'Code (optional)', placeholder: 'MATH4', required: false },
             ],
             validate: (v) => (subjects.some((s) => s.id !== form?.item?.id && s.level === v.level && s.name.toLowerCase() === v.name.toLowerCase()) ? { name: 'This subject already exists for the grade level.' } : {}),
-            save: (v, e) => (e ? setSubjects((l) => l.map((x) => (x.id === e.id ? { ...x, ...v } : x))) : setSubjects((l) => [...l, { id: uid(), ...v }])),
+            save: (v, e, o) => {
+                const data = { grade_level_id: v.level, name: v.name, code: v.code || null };
+                return e ? router.put(R.subject(e), data, o) : router.post(R.subject(), data, o);
+            },
         },
     };
 
     const cfg = form ? configs[form.kind] : null;
+
     const submit = (values) => {
-        cfg.save(values, form.item);
-        toast.success(form.item ? 'Changes saved.' : 'Added.');
-        setForm(null);
+        setServerErrors({});
+        const fieldIds = cfg.fields.map((f) => f.id);
+        cfg.save(values, form.item, reqOpts({
+            onSuccess: () => setForm(null), // the success toast comes from the server flash message
+            onError: (errs) => handleErrors(errs, fieldIds),
+        }));
     };
 
     const requestDelete = (kind, item) => {
@@ -436,43 +491,63 @@ function AcademicTab() {
         }
         setToDelete({ kind, item });
     };
+
     const confirmDelete = () => {
         const { kind, item } = toDelete;
-        if (kind === 'period') setPeriods((p) => ({ ...p, [yearId]: p[yearId].filter((x) => x.id !== item.id) }));
-        if (kind === 'level') setLevels((l) => l.filter((x) => x.id !== item.id));
-        if (kind === 'section') setSections((l) => l.filter((x) => x.id !== item.id));
-        if (kind === 'subject') setSubjects((l) => l.filter((x) => x.id !== item.id));
-        setToDelete(null);
-        toast.success('Removed.');
+        const url = {
+            period:  () => R.periods(year, item),
+            level:   () => R.level(item),
+            section: () => R.sections(year, item),
+            subject: () => R.subject(item),
+        }[kind]();
+        router.delete(url, reqOpts({
+            onSuccess: () => setToDelete(null),
+            onError: (errs) => { setToDelete(null); toast.error(Object.values(errs)[0] ?? 'This item could not be removed.'); },
+        }));
     };
 
-    const addBtn = (kind, label) => <Button variant="outline" size="sm" className="border-[#D8E0E8]" onClick={() => open(kind)}><Plus className="mr-1.5 size-4" aria-hidden />{label}</Button>;
+    const addBtn = (kind, label, disabled = false) => (
+        <Button variant="outline" size="sm" className="border-[#D8E0E8]" disabled={disabled} onClick={() => open(kind)}>
+            <Plus className="mr-1.5 size-4" aria-hidden />{label}
+        </Button>
+    );
+    const needsYear = !year;
 
     return (
         <div className="space-y-4">
             <Card title="School years" description="Records are kept for every school year. Only one year is active at a time." actions={addBtn('year', 'Add school year')}>
-                <ul className="divide-y divide-[#D8E0E8]">
-                    {years.map((y) => (
-                        <RowItem
-                            key={y.id} title={`S.Y. ${y.name}`} subtitle={`${formatDate(y.start)} to ${formatDate(y.end)}`}
-                            badge={y.active ? <span className="ml-2 rounded-full bg-[#E3F3EA] px-2 py-0.5 text-xs font-medium text-[#1F6B4B]">Active</span> : null}
-                            extra={!y.active && <Button variant="outline" size="sm" className="border-[#D8E0E8]" onClick={() => setActive(y.id)}>Make active</Button>}
-                            onEdit={() => open('year', y)}
-                        />
-                    ))}
-                </ul>
+                {years.length === 0 ? (
+                    <p className="py-4 text-center text-sm text-[#607184]">No school years yet. Add your first school year to start setting up sections and grading periods.</p>
+                ) : (
+                    <ul className="divide-y divide-[#D8E0E8]">
+                        {years.map((y) => (
+                            <RowItem
+                                key={y.id} title={`S.Y. ${y.name}`} subtitle={`${formatDate(y.start)} to ${formatDate(y.end)}`}
+                                badge={y.active ? <span className="ml-2 rounded-full bg-[#E3F3EA] px-2 py-0.5 text-xs font-medium text-[#1F6B4B]">Active</span> : null}
+                                extra={!y.active && <Button variant="outline" size="sm" className="border-[#D8E0E8]" disabled={busy} onClick={() => setActive(y)}>Make active</Button>}
+                                onEdit={() => open('year', y)}
+                            />
+                        ))}
+                    </ul>
+                )}
             </Card>
 
-            <div className="flex flex-wrap items-center gap-3">
-                <label htmlFor="as-year" className="text-sm font-medium text-[#17324D]">Showing school year</label>
-                <div className="w-48">
-                    <select id="as-year" className={selectCls} value={yearId} onChange={(e) => setYearId(e.target.value)}>
-                        {years.map((y) => <option key={y.id} value={y.id}>S.Y. {y.name}{y.active ? ' (active)' : ''}</option>)}
-                    </select>
+            {year && (
+                <div className="flex flex-wrap items-center gap-3">
+                    <label htmlFor="as-year" className="text-sm font-medium text-[#17324D]">Showing school year</label>
+                    <div className="w-48">
+                        <select id="as-year" className={selectCls} value={yearId} onChange={(e) => setSelectedId(Number(e.target.value))}>
+                            {years.map((y) => <option key={y.id} value={y.id}>S.Y. {y.name}{y.active ? ' (active)' : ''}</option>)}
+                        </select>
+                    </div>
                 </div>
-            </div>
+            )}
 
-            <Card title="Grading periods" description={`Quarters for S.Y. ${year?.name}. Assessments must fall inside a period.`} actions={addBtn('period', 'Add period')}>
+            <Card
+                title="Grading periods"
+                description={year ? `Quarters for S.Y. ${year.name}. Assessments must fall inside a period.` : 'Add a school year first.'}
+                actions={addBtn('period', 'Add period', needsYear)}
+            >
                 {yearPeriods.length === 0 ? <p className="py-4 text-center text-sm text-[#607184]">No grading periods yet.</p> : (
                     <ul className="divide-y divide-[#D8E0E8]">
                         {yearPeriods.map((p) => <RowItem key={p.id} title={p.name} subtitle={`${formatDate(p.start)} to ${formatDate(p.end)}`} onEdit={() => open('period', p)} onDelete={() => requestDelete('period', p)} />)}
@@ -482,11 +557,13 @@ function AcademicTab() {
 
             <div className="grid gap-4 lg:grid-cols-3">
                 <Card title="Grade levels" actions={addBtn('level', 'Add')}>
-                    <ul className="divide-y divide-[#D8E0E8]">
-                        {levels.map((l) => <RowItem key={l.id} title={l.name} onEdit={() => open('level', l)} onDelete={() => requestDelete('level', l)} />)}
-                    </ul>
+                    {levels.length === 0 ? <p className="py-4 text-center text-sm text-[#607184]">No grade levels yet.</p> : (
+                        <ul className="divide-y divide-[#D8E0E8]">
+                            {levels.map((l) => <RowItem key={l.id} title={l.name} onEdit={() => open('level', l)} onDelete={() => requestDelete('level', l)} />)}
+                        </ul>
+                    )}
                 </Card>
-                <Card title="Sections" description={`S.Y. ${year?.name}`} actions={addBtn('section', 'Add')}>
+                <Card title="Sections" description={year ? `S.Y. ${year.name}` : undefined} actions={addBtn('section', 'Add', needsYear)}>
                     {yearSections.length === 0 ? <p className="py-4 text-center text-sm text-[#607184]">No sections for this year.</p> : (
                         <ul className="divide-y divide-[#D8E0E8]">
                             {yearSections.map((s) => <RowItem key={s.id} title={`${levelName(s.level)} – ${s.name}`} onEdit={() => open('section', s)} onDelete={() => requestDelete('section', s)} />)}
@@ -494,9 +571,11 @@ function AcademicTab() {
                     )}
                 </Card>
                 <Card title="Subjects" actions={addBtn('subject', 'Add')}>
-                    <ul className="divide-y divide-[#D8E0E8]">
-                        {subjects.map((s) => <RowItem key={s.id} title={s.name} subtitle={`${levelName(s.level)}${s.code ? ` · ${s.code}` : ''}`} onEdit={() => open('subject', s)} onDelete={() => requestDelete('subject', s)} />)}
-                    </ul>
+                    {subjects.length === 0 ? <p className="py-4 text-center text-sm text-[#607184]">No subjects yet.</p> : (
+                        <ul className="divide-y divide-[#D8E0E8]">
+                            {subjects.map((s) => <RowItem key={s.id} title={s.name} subtitle={`${levelName(s.level)}${s.code ? ` · ${s.code}` : ''}`} onEdit={() => open('subject', s)} onDelete={() => requestDelete('subject', s)} />)}
+                        </ul>
+                    )}
                 </Card>
             </div>
 
@@ -506,21 +585,22 @@ function AcademicTab() {
                 <FormDialog
                     key={form.key} open onOpenChange={(o) => !o && setForm(null)}
                     title={cfg.title(form.item)} description={cfg.description?.()} fields={cfg.fields}
-                    initial={form.item} validate={cfg.validate} submitLabel={form.item ? 'Save changes' : 'Add'} onSave={submit}
+                    initial={form.item} validate={cfg.validate} submitLabel={form.item ? 'Save changes' : 'Add'}
+                    onSave={submit} serverErrors={serverErrors} processing={busy}
                 />
             )}
             <ConfirmDialog
                 open={!!toDelete} onOpenChange={(o) => !o && setToDelete(null)}
                 title="Remove this item?"
                 description="Records that use it are kept for history. This only removes it from your setup lists."
-                onConfirm={confirmDelete}
+                onConfirm={confirmDelete} processing={busy}
             />
         </div>
     );
 }
 
 /* =====================================================================
-   TAB 3: BACKUP & RESTORE
+   TAB 3: BACKUP & RESTORE  (sample data)
    ===================================================================== */
 
 function RestoreDialog({ target, onClose, onRestored }) {
@@ -817,13 +897,25 @@ function BackupTab() {
    PAGE
    ===================================================================== */
 
-export default function Settings() {
+export default function Settings({
+    academicYears = [],
+    gradingPeriods = {},
+    gradeLevels = [],
+    sections = [],
+    subjects = [],
+}) {
+    const { flash } = usePage().props;
     const [tab, setTab] = useState('general');
     const tabs = [
         { id: 'general', label: 'Profile & preferences' },
         { id: 'academic', label: 'Academic setup' },
         { id: 'backup', label: 'Backup & restore' },
     ];
+
+    // Success messages from the server (back()->with('success', ...)).
+    useEffect(() => {
+        if (flash?.success) toast.success(flash.success);
+    }, [flash]);
 
     return (
         <AppLayout title="Settings & Backup" description="Your account, school year setup and data protection.">
@@ -842,7 +934,12 @@ export default function Settings() {
                 </div>
 
                 {tab === 'general' && <GeneralTab />}
-                {tab === 'academic' && <AcademicTab />}
+                {tab === 'academic' && (
+                    <AcademicTab
+                        years={academicYears} periods={gradingPeriods} levels={gradeLevels}
+                        sections={sections} subjects={subjects}
+                    />
+                )}
                 {tab === 'backup' && <BackupTab />}
             </div>
         </AppLayout>

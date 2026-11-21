@@ -15,7 +15,7 @@ Route::get('/', function () {
     return Auth::check()
         ? redirect()->route('dashboard')
         : redirect()->route('login');
-        
+
 })->name('entry');
 
 Route::middleware(['auth'])->group(function () {
@@ -36,7 +36,6 @@ Route::middleware(['auth'])->group(function () {
 
     Route::get('/grades', fn() => Inertia::render('Grades'))->name('grades');
 
-    Route::get('/settings', fn() => Inertia::render('SettingsAndBackup'))->name('settings');
 });
 
 Route::middleware('auth')->group(function () {
@@ -46,3 +45,4 @@ Route::middleware('auth')->group(function () {
 });
 
 require __DIR__.'/auth.php';
+require __DIR__.'/setting.php';
