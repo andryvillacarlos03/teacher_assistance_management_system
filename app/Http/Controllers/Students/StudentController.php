@@ -10,6 +10,9 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
+use App\Models\AcademicYear;
+use App\Models\Section;
+use App\Models\Enrollment;
 
 class StudentController extends Controller {
 
@@ -17,24 +20,47 @@ class StudentController extends Controller {
 
     public function index(Request $request): Response {
 
-        $filters = [
-            'search'   => $request->string('search')->toString() ?: null,
-            'archived' => $request->boolean('archived'),
-        ];
+        $years = AcademicYear::query()->latestFirst()->get();
+        $year  = $years->firstWhere('id', $request->integer('year'))
+            ?? $years->firstWhere('is_active', true)
+            ?? $years->first();
+
+        $enrollments = $year ? $this->service->enrollmentsForYear($year) : collect();
+        $history     = $this->service->historyFor($enrollments->pluck('student_id'));
 
         return Inertia::render('Students', [
-            'students' => $this->service->paginate($filters)->through(fn (Student $s) => [
-                'id'             => $s->id,
-                'student_number' => $s->student_number,
-                'first_name'     => $s->first_name,
-                'middle_name'    => $s->middle_name,
-                'last_name'      => $s->last_name,
-                'suffix'         => $s->suffix,
-                'full_name'      => $s->full_name,
-                'display_name'   => $s->display_name,
-                'archived'       => $s->trashed(),
-            ]),
-            'filters' => $filters,
+            'academicYears' => $years->map(fn (AcademicYear $y) => [
+                'id' => $y->id, 'name' => $y->name, 'active' => $y->is_active,
+            ])->values(),
+            'yearId'   => $year?->id,
+            'sections' => $year
+                ? Section::query()->forYear($year)->with('gradeLevel')->ordered()->get()
+                    ->map(fn (Section $s) => ['id' => $s->id, 'name' => $s->full_name])->values()
+                : [],
+            'rows' => $enrollments->map(fn (Enrollment $e) => [
+                'student' => [
+                    'id'            => $e->student->id,
+                    'studentNumber' => $e->student->student_number,
+                    'firstName'     => $e->student->first_name,
+                    'middleName'    => $e->student->middle_name,
+                    'lastName'      => $e->student->last_name,
+                    'suffix'        => $e->student->suffix,
+                    'archived'      => $e->student->trashed(),
+                ],
+                'enrollment' => [
+                    'id'        => $e->id,
+                    'sectionId' => $e->section_id,
+                    'section'   => $e->section->full_name,
+                    'status'    => $e->status,
+                ],
+            ])->values(),
+            'history' => (object) $history->map(fn ($list) => $list->map(fn (Enrollment $e) => [
+                'id'       => $e->id,
+                'yearId'   => $e->academic_year_id,
+                'yearName' => $e->academicYear->name,
+                'section'  => $e->section->full_name,
+                'status'   => $e->status,
+            ])->values())->all(),
         ]);
     }
 
