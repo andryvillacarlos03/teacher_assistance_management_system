@@ -13,7 +13,6 @@ class StudentService {
 
     private const FIELDS = ['student_number', 'first_name', 'middle_name', 'last_name', 'suffix'];
 
-    /** Enrollments of one school year, including archived students. */
     public function enrollmentsForYear(AcademicYear $year): Collection {
 
         return Enrollment::query()
@@ -24,7 +23,6 @@ class StudentService {
             ->values();
     }
 
-    /** Every enrollment of the given students, newest school year first. */
     public function historyFor(Collection $studentIds): Collection {
 
         return Enrollment::query()
