@@ -22,6 +22,8 @@ class NativeAppServiceProvider implements ProvidesPhpIni {
             Log::error('Migration exception: ' . $e->getMessage());
         }
 
+        Artisan::call('backups:auto');
+
         Menu::create();
 
         Window::open('main')

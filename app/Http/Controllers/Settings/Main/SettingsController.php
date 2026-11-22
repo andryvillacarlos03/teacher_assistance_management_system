@@ -15,6 +15,7 @@ use App\Services\SectionService;
 use App\Models\Section;
 use App\Services\SubjectService;
 use App\Models\Subject;
+use App\Services\BackupService;
 
 class SettingsController extends Controller {
 
@@ -22,7 +23,8 @@ public function __construct(
     private AcademicYearService $academicYears,
     private GradeLevelService $gradeLevels,
     private SectionService $sections,
-    private SubjectService $subjects
+    private SubjectService $subjects,
+    private BackupService $backups
 ) {}
 
     public function index(Request $request): Response {
@@ -36,7 +38,6 @@ public function __construct(
             ],
             'preferences' => $this->preferences(),
 
-            // Tab 2: Academic setup
             'academicYears' => $this->academicYears->all()->map(fn (AcademicYear $y) => [
                 'id'       => $y->id,
                 'slug'     => $y->slug,
@@ -48,8 +49,6 @@ public function __construct(
                 'blockers' => $y->deletionBlockers(),
             ])->values(),
 
-            // Filled in once the Phase 2 models exist.
-            // (object) [] so it serializes as {} (keyed by year id), not [].
             'gradingPeriods' => (object) $this->academicYears->all()
                                             ->mapWithKeys(fn (AcademicYear $y) => [
                                                 $y->id => $y->gradingPeriods->map(fn (GradingPeriod $p) => [
@@ -85,13 +84,13 @@ public function __construct(
                             'level'        => $s->grade_level_id,   // the page reads s.level
                         ])->values(),
 
-            // Tab 3: Backup & restore (Phase 8)
-            'backups'      => [],
-            'storageUsage' => ['database' => 0, 'files' => 0],
-        ]);
+            'backups'        => $this->backups->all(),
+            'storageUsage'   => $this->backups->storageUsage(),
+            'backupSettings' => $this->backups->autoSettings() + ['folder' => $this->backups->folder()],
+    
+            ]);
     }
 
-    /** Placeholder until a preferences store (settings table or JSON file) exists. */
     private function preferences(): array {
 
         return [

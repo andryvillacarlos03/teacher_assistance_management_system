@@ -12,10 +12,8 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-// Sample data is now used ONLY by the Profile & preferences and Backup & restore tabs.
-import {
-    backupFileName, initialBackups, initialPreferences, initialProfile, storageUsage,
-} from '@/data/settingsSample';
+// Sample data is now used ONLY by the Profile & preferences tab.
+import { initialPreferences, initialProfile } from '@/data/settingsSample';
 import AppLayout from '@/layouts/AppLayout';
 
 /* Theme: Navy #17324D | Teal #247A73 | Mint #E8F3F1 | Border #D8E0E8 | Gray #607184
@@ -30,6 +28,8 @@ const R = {
     sections: (y, s) => `/settings/academic-years/${y.id}/sections${s ? `/${s.id}` : ''}`,
     level:    (l)    => (l ? `/settings/grade-levels/${l.id}` : '/settings/grade-levels'),
     subject:  (s)    => (s ? `/settings/subjects/${s.id}` : '/settings/subjects'),
+    // Backups are identified by their file name (e.g. ptas-backup-20261122-093000.ptas).
+    backups:  (id, action) => `/settings/backups${id ? `/${id}` : ''}${action ? `/${action}` : ''}`,
 };
 
 /* Server field name -> form field id used in the dialogs */
@@ -600,51 +600,88 @@ function AcademicTab({ years, periods, levels, sections, subjects }) {
 }
 
 /* =====================================================================
-   TAB 3: BACKUP & RESTORE  (sample data)
+   TAB 3: BACKUP & RESTORE  (real data from BackupController)
    ===================================================================== */
 
-function RestoreDialog({ target, onClose, onRestored }) {
+const kindLabel = { auto: 'Automatic', manual: 'Manual', safety: 'Safety (before restore)' };
+
+/** Asks for a backup password, then calls onSubmit(password). */
+function PasswordDialog({ title, description, confirmLabel, error, processing, onSubmit, onClose }) {
+    const [password, setPassword] = useState('');
+
+    return (
+        <Dialog open onOpenChange={(o) => !o && !processing && onClose()}>
+            <DialogContent className="border-[#D8E0E8] bg-white text-[#17324D] sm:max-w-md">
+                <DialogHeader>
+                    <DialogTitle>{title}</DialogTitle>
+                    <DialogDescription className="text-[#607184]">{description}</DialogDescription>
+                </DialogHeader>
+                <form onSubmit={(e) => { e.preventDefault(); onSubmit(password); }} className="space-y-4">
+                    <Field id="pd-pw" label="Backup password" error={error}>
+                        <Input id="pd-pw" type="password" autoComplete="off" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} className="border-[#D8E0E8]" />
+                    </Field>
+                    <DialogFooter className="gap-2 sm:gap-0">
+                        <Button type="button" variant="outline" className="border-[#D8E0E8]" disabled={processing} onClick={onClose}>Cancel</Button>
+                        <Button type="submit" disabled={processing || !password} className="bg-[#247A73] text-white hover:bg-[#1d6560]">
+                            {processing && <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />}{confirmLabel}
+                        </Button>
+                    </DialogFooter>
+                </form>
+            </DialogContent>
+        </Dialog>
+    );
+}
+
+/**
+ * Restore from a backup in the folder (target.id) or from a chosen file (target.file).
+ * phase: 'form' -> 'working' -> 'done'
+ */
+function RestoreDialog({ target, onClose }) {
     const [password, setPassword] = useState('');
     const [understood, setUnderstood] = useState(false);
     const [error, setError] = useState('');
-    const [progress, setProgress] = useState(null); // null = not started
-    const done = progress !== null && progress >= 100;
+    const [passwordError, setPasswordError] = useState('');
+    const [phase, setPhase] = useState('form');
 
-    useEffect(() => {
-        if (progress === null || progress >= 100) return undefined;
-        const t = setTimeout(() => setProgress((p) => Math.min(100, p + 14)), 200);
-        return () => clearTimeout(t);
-    }, [progress]);
-
-    useEffect(() => { if (done) onRestored(target); }, [done]); // eslint-disable-line react-hooks/exhaustive-deps
+    const needsPassword = target.encrypted || target.unknownEncryption;
 
     const start = () => {
-        if (target.encrypted && !password) { setError('Enter the backup password.'); return; }
+        if (target.encrypted && !password) { setPasswordError('Enter the backup password.'); return; }
         if (!understood) { setError('Confirm that you understand your current data will be replaced.'); return; }
-        setError('');
-        setProgress(0);
+        setError(''); setPasswordError('');
+
+        const url = target.file ? R.backups(null, 'restore-upload') : R.backups(target.id, 'restore');
+        const data = target.file ? { backup: target.file, password: password || null } : { password: password || null };
+
+        router.post(url, data, {
+            forceFormData: !!target.file,
+            preserveScroll: true,
+            onStart: () => setPhase('working'),
+            onSuccess: () => setPhase('done'),
+            onError: (errs) => {
+                setPhase('form');
+                setPasswordError(errs.password ?? '');
+                setError(errs.backup ?? (errs.password ? '' : Object.values(errs)[0] ?? 'The backup could not be restored.'));
+            },
+        });
     };
 
     return (
-        <Dialog open onOpenChange={(o) => !o && progress === null && onClose()}>
+        <Dialog open onOpenChange={(o) => !o && phase !== 'working' && onClose()}>
             <DialogContent className="border-[#D8E0E8] bg-white text-[#17324D] sm:max-w-md">
                 <DialogHeader>
-                    <DialogTitle>{done ? 'Restore complete' : 'Restore from backup'}</DialogTitle>
-                    <DialogDescription className="text-[#607184]">{target.label}</DialogDescription>
+                    <DialogTitle>{phase === 'done' ? 'Restore complete' : 'Restore from backup'}</DialogTitle>
+                    <DialogDescription className="break-all text-[#607184]">{target.label}</DialogDescription>
                 </DialogHeader>
 
-                {progress === null && (
+                {phase === 'form' && (
                     <div className="space-y-4">
                         <Notice tone="danger">
                             Restoring <strong>replaces all current data</strong> with the contents of this backup. Anything recorded after {target.at ? formatStamp(target.at) : 'the backup was made'} will be lost. A safety backup of your current data is created first.
+                            {target.includesFiles === false && ' This backup has no teaching files, so your current files stay as they are.'}
                         </Notice>
-                        {target.encrypted && (
-                            <Field id="rs-pw" label="Backup password" error={error && !password ? error : ''}>
-                                <Input id="rs-pw" type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="border-[#D8E0E8]" autoComplete="off" />
-                            </Field>
-                        )}
-                        {target.unknownEncryption && (
-                            <Field id="rs-pw" label="Backup password (if it has one)">
+                        {needsPassword && (
+                            <Field id="rs-pw" label={target.encrypted ? 'Backup password' : 'Backup password (if it has one)'} error={passwordError}>
                                 <Input id="rs-pw" type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="border-[#D8E0E8]" autoComplete="off" />
                             </Field>
                         )}
@@ -652,7 +689,7 @@ function RestoreDialog({ target, onClose, onRestored }) {
                             <input type="checkbox" className="mt-0.5 size-4 accent-[#247A73]" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} />
                             I understand my current data will be replaced.
                         </label>
-                        {error && (password || !target.encrypted) && <p className="text-sm text-[#C65353]" role="alert">{error}</p>}
+                        {error && <p className="text-sm text-[#C65353]" role="alert">{error}</p>}
                         <DialogFooter className="gap-2 sm:gap-0">
                             <Button variant="outline" className="border-[#D8E0E8]" onClick={onClose}>Cancel</Button>
                             <Button onClick={start} className="bg-[#C65353] text-white hover:bg-[#b04545]"><RotateCcw className="mr-2 size-4" aria-hidden />Restore now</Button>
@@ -660,18 +697,15 @@ function RestoreDialog({ target, onClose, onRestored }) {
                     </div>
                 )}
 
-                {progress !== null && !done && (
-                    <div className="space-y-3" aria-live="polite">
-                        <p className="flex items-center gap-2 text-sm"><Loader2 className="size-4 animate-spin text-[#247A73]" aria-hidden />Restoring your data. Please keep the app open.</p>
-                        <div className="h-2 overflow-hidden rounded-full bg-[#E8F3F1]" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} aria-label="Restore progress">
-                            <div className="h-full rounded-full bg-[#247A73] transition-all" style={{ width: `${progress}%` }} />
-                        </div>
-                    </div>
+                {phase === 'working' && (
+                    <p className="flex items-center gap-2 text-sm" aria-live="polite">
+                        <Loader2 className="size-4 animate-spin text-[#247A73]" aria-hidden />Restoring your data. Please keep the app open.
+                    </p>
                 )}
 
-                {done && (
+                {phase === 'done' && (
                     <div className="space-y-4">
-                        <Notice tone="success" icon={Check}>Your data was restored. In the finished desktop app, the application restarts here so the restored records load.</Notice>
+                        <Notice tone="success" icon={Check}>Your data was restored. Close and reopen the app so the restored records load everywhere.</Notice>
                         <DialogFooter><Button onClick={onClose} className="bg-[#247A73] text-white hover:bg-[#1d6560]">Done</Button></DialogFooter>
                     </div>
                 )}
@@ -680,40 +714,37 @@ function RestoreDialog({ target, onClose, onRestored }) {
     );
 }
 
-function BackupTab() {
-    const [backups, setBackups] = useState(initialBackups);
+function BackupTab({ backups, storageUsage, settings }) {
     const [includeFiles, setIncludeFiles] = useState(true);
     const [encrypt, setEncrypt] = useState(true);
     const [pw, setPw] = useState({ password: '', confirm: '' });
     const [pwErrors, setPwErrors] = useState({});
-    const [progress, setProgress] = useState(null);
-    const [verifying, setVerifying] = useState(null);
-    const [auto, setAuto] = useState({ enabled: true, frequency: 'daily', keep: '10' });
+    const [creating, setCreating] = useState(false);
+
+    const [verifying, setVerifying] = useState(null);   // backup id being verified
+    const [verifyTarget, setVerifyTarget] = useState(null);
+    const [verifyError, setVerifyError] = useState('');
+
+    const [auto, setAuto] = useState({ enabled: settings.enabled, frequency: settings.frequency, keep: String(settings.keep) });
+    const [folderOpen, setFolderOpen] = useState(false);
+    const [folderErrors, setFolderErrors] = useState({});
+    const [folderBusy, setFolderBusy] = useState(false);
+
     const [restore, setRestore] = useState(null);
     const [toDelete, setToDelete] = useState(null);
+    const [deleting, setDeleting] = useState(false);
     const fileRef = useRef(null);
+
+    // Keep the form in line with what the server saved.
+    useEffect(() => {
+        setAuto({ enabled: settings.enabled, frequency: settings.frequency, keep: String(settings.keep) });
+    }, [settings.enabled, settings.frequency, settings.keep]);
 
     const sorted = useMemo(() => backups.slice().sort((a, b) => b.at.localeCompare(a.at)), [backups]);
     const last = sorted[0];
     const verified = backups.some((b) => b.verifiedAt);
     const sinceLast = last ? daysSince(last.at) : null;
-
     const estSize = storageUsage.database + (includeFiles ? storageUsage.files : 0);
-
-    // Simulated backup progress
-    useEffect(() => {
-        if (progress === null) return undefined;
-        if (progress >= 100) {
-            const at = new Date().toISOString();
-            setBackups((l) => [...l, { id: Date.now(), kind: 'manual', at, size: estSize, includesFiles: includeFiles, encrypted: encrypt, verifiedAt: null }]);
-            setProgress(null);
-            setPw({ password: '', confirm: '' });
-            toast.success('Backup created. Test it with “Verify” to be sure it can be restored.');
-            return undefined;
-        }
-        const t = setTimeout(() => setProgress((p) => Math.min(100, p + 12)), 180);
-        return () => clearTimeout(t);
-    }, [progress]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const createBackup = () => {
         const errs = {};
@@ -723,20 +754,42 @@ function BackupTab() {
         }
         setPwErrors(errs);
         if (Object.keys(errs).length) return;
-        setProgress(0);
+
+        router.post(R.backups(), {
+            include_files: includeFiles,
+            password: encrypt ? pw.password : null,
+            password_confirmation: encrypt ? pw.confirm : null,
+        }, {
+            preserveScroll: true,
+            onStart: () => setCreating(true),
+            onFinish: () => setCreating(false),
+            onSuccess: () => { setPw({ password: '', confirm: '' }); setPwErrors({}); },
+            onError: (errs2) => {
+                setPwErrors({ password: errs2.password });
+                if (errs2.backup) toast.error(errs2.backup);
+            },
+        });
     };
 
-    const verify = (b) => {
-        setVerifying(b.id);
-        setTimeout(() => {
-            setBackups((l) => l.map((x) => (x.id === b.id ? { ...x, verifiedAt: new Date().toISOString() } : x)));
-            setVerifying(null);
-            toast.success('Backup verified. It can be restored.');
-        }, 1200);
+    const runVerify = (b, password) => {
+        router.post(R.backups(b.id, 'verify'), { password: password || null }, {
+            preserveScroll: true,
+            onStart: () => setVerifying(b.id),
+            onFinish: () => setVerifying(null),
+            onSuccess: () => { setVerifyTarget(null); setVerifyError(''); },
+            onError: (errs) => {
+                const msg = errs.password ?? errs.backup ?? 'This backup could not be verified.';
+                if (b.encrypted) setVerifyError(msg); else toast.error(msg);
+            },
+        });
+    };
+
+    const startVerify = (b) => {
+        if (b.encrypted) { setVerifyError(''); setVerifyTarget(b); } else runVerify(b, null);
     };
 
     const startRestore = (b) => setRestore({
-        id: b.id, label: backupFileName(b.at, b.kind === 'safety' ? 'safety' : 'backup'), at: b.at, encrypted: b.encrypted,
+        id: b.id, label: b.id, at: b.at, encrypted: b.encrypted, includesFiles: b.includesFiles,
     });
 
     const onFile = (e) => {
@@ -744,15 +797,29 @@ function BackupTab() {
         e.target.value = '';
         if (!f) return;
         if (!f.name.toLowerCase().endsWith('.ptas')) { toast.error('Choose a .ptas backup file.'); return; }
-        setRestore({ id: null, label: f.name, at: null, encrypted: false, unknownEncryption: true });
+        setRestore({ id: null, file: f, label: f.name, at: null, encrypted: false, unknownEncryption: true });
     };
 
-    const restored = () => {
-        const at = new Date().toISOString();
-        setBackups((l) => [...l, { id: Date.now(), kind: 'safety', at, size: storageUsage.database, includesFiles: false, encrypted: true, verifiedAt: null }]);
+    const saveAuto = (next) => {
+        setAuto(next);
+        router.put(R.backups(null, 'auto'), next, {
+            preserveScroll: true,
+            onError: () => {
+                setAuto({ enabled: settings.enabled, frequency: settings.frequency, keep: String(settings.keep) });
+                toast.error('Automatic backup settings could not be saved.');
+            },
+        });
     };
 
-    const kindLabel = { auto: 'Automatic', manual: 'Manual', safety: 'Safety (before restore)' };
+    const confirmDelete = () => {
+        router.delete(R.backups(toDelete.id), {
+            preserveScroll: true,
+            onStart: () => setDeleting(true),
+            onFinish: () => setDeleting(false),
+            onSuccess: () => setToDelete(null),
+            onError: () => { setToDelete(null); toast.error('The backup could not be deleted.'); },
+        });
+    };
 
     return (
         <div className="space-y-4">
@@ -771,69 +838,65 @@ function BackupTab() {
                 <Card title="Create a backup" description="Saves a copy of your records to your backup folder.">
                     <div className="space-y-4">
                         <label className="flex cursor-pointer items-start gap-2 text-sm">
-                            <input type="checkbox" className="mt-0.5 size-4 accent-[#247A73]" checked={includeFiles} onChange={(e) => setIncludeFiles(e.target.checked)} disabled={progress !== null} />
+                            <input type="checkbox" className="mt-0.5 size-4 accent-[#247A73]" checked={includeFiles} onChange={(e) => setIncludeFiles(e.target.checked)} disabled={creating} />
                             <span>Include teaching files <span className="text-[#607184]">(adds {formatBytes(storageUsage.files)})</span></span>
                         </label>
 
                         <div className="space-y-3">
                             <label className="flex cursor-pointer items-start gap-2 text-sm">
-                                <input type="checkbox" className="mt-0.5 size-4 accent-[#247A73]" checked={encrypt} onChange={(e) => setEncrypt(e.target.checked)} disabled={progress !== null} />
+                                <input type="checkbox" className="mt-0.5 size-4 accent-[#247A73]" checked={encrypt} onChange={(e) => setEncrypt(e.target.checked)} disabled={creating} />
                                 <span>Protect with a password <span className="text-[#607184]">(recommended: backups contain student records)</span></span>
                             </label>
                             {encrypt && (
                                 <div className="grid gap-3 sm:grid-cols-2">
                                     <Field id="bk-pw" label="Password" error={pwErrors.password}>
-                                        <Input id="bk-pw" type="password" autoComplete="new-password" value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} className="border-[#D8E0E8]" disabled={progress !== null} />
+                                        <Input id="bk-pw" type="password" autoComplete="new-password" value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} className="border-[#D8E0E8]" disabled={creating} />
                                     </Field>
                                     <Field id="bk-pw2" label="Confirm password" error={pwErrors.confirm}>
-                                        <Input id="bk-pw2" type="password" autoComplete="new-password" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} className="border-[#D8E0E8]" disabled={progress !== null} />
+                                        <Input id="bk-pw2" type="password" autoComplete="new-password" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} className="border-[#D8E0E8]" disabled={creating} />
                                     </Field>
                                     <p className="text-xs text-[#C65353] sm:col-span-2">If you forget this password, the backup cannot be opened. Keep it somewhere safe.</p>
                                 </div>
                             )}
                         </div>
 
-                        {progress === null ? (
+                        {!creating ? (
                             <div className="flex flex-wrap items-center gap-3">
                                 <Button onClick={createBackup} className="bg-[#247A73] text-white hover:bg-[#1d6560]"><Download className="mr-2 size-4" aria-hidden />Back up now</Button>
                                 <span className="text-xs text-[#607184]">About {formatBytes(estSize)}</span>
                             </div>
                         ) : (
-                            <div className="space-y-2" aria-live="polite">
-                                <p className="flex items-center gap-2 text-sm"><Loader2 className="size-4 animate-spin text-[#247A73]" aria-hidden />Creating backup…</p>
-                                <div className="h-2 overflow-hidden rounded-full bg-[#E8F3F1]" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} aria-label="Backup progress">
-                                    <div className="h-full rounded-full bg-[#247A73] transition-all" style={{ width: `${progress}%` }} />
-                                </div>
-                            </div>
+                            <p className="flex items-center gap-2 text-sm" aria-live="polite"><Loader2 className="size-4 animate-spin text-[#247A73]" aria-hidden />Creating backup…</p>
                         )}
                     </div>
                 </Card>
 
-                <Card title="Automatic backups" description="Let the app back up for you in the background.">
+                <Card title="Automatic backups" description="Let the app back up for you each time it opens, when one is due.">
                     <div className="space-y-4">
                         <div className="flex items-center justify-between gap-3">
                             <label htmlFor="auto-on" className="text-sm font-medium">Back up automatically</label>
-                            <Switch id="auto-on" label="Back up automatically" checked={auto.enabled} onChange={(v) => { setAuto({ ...auto, enabled: v }); toast.success(v ? 'Automatic backups turned on.' : 'Automatic backups turned off.'); }} />
+                            <Switch id="auto-on" label="Back up automatically" checked={auto.enabled} onChange={(v) => saveAuto({ ...auto, enabled: v })} />
                         </div>
                         <div className="grid gap-4 sm:grid-cols-2">
                             <Field id="auto-freq" label="How often">
-                                <select id="auto-freq" className={selectCls} value={auto.frequency} disabled={!auto.enabled} onChange={(e) => setAuto({ ...auto, frequency: e.target.value })}>
+                                <select id="auto-freq" className={selectCls} value={auto.frequency} disabled={!auto.enabled} onChange={(e) => saveAuto({ ...auto, frequency: e.target.value })}>
                                     <option value="daily">Every day</option>
                                     <option value="weekly">Every week</option>
                                     <option value="close">When I close the app</option>
                                 </select>
                             </Field>
                             <Field id="auto-keep" label="Keep the latest">
-                                <select id="auto-keep" className={selectCls} value={auto.keep} disabled={!auto.enabled} onChange={(e) => setAuto({ ...auto, keep: e.target.value })}>
+                                <select id="auto-keep" className={selectCls} value={auto.keep} disabled={!auto.enabled} onChange={(e) => saveAuto({ ...auto, keep: e.target.value })}>
                                     {['5', '10', '20'].map((n) => <option key={n} value={n}>{n} backups</option>)}
                                 </select>
                             </Field>
                         </div>
+                        <Notice tone="info" icon={Lock}>Automatic backups are saved without a password, because you are not there to type one. Keep your backup folder somewhere private.</Notice>
                         <div className="rounded-md bg-[#F8FAFC] p-3">
                             <p className="text-xs text-[#607184]">Backup folder</p>
                             <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
-                                <p className="break-all text-sm font-medium">Documents\PTAS Backups</p>
-                                <Button variant="outline" size="sm" className="border-[#D8E0E8]" onClick={() => toast.info('The desktop app opens a folder picker here.')}>Change folder</Button>
+                                <p className="break-all text-sm font-medium">{settings.folder || 'Not set'}</p>
+                                <Button variant="outline" size="sm" className="border-[#D8E0E8]" onClick={() => { setFolderErrors({}); setFolderOpen(true); }}>Change folder</Button>
                             </div>
                         </div>
                         <p className="text-xs text-[#607184]">Tip: also copy a backup to a USB drive or cloud folder now and then. A backup on the same computer will not help if the computer is lost.</p>
@@ -852,14 +915,14 @@ function BackupTab() {
                 }
             >
                 {sorted.length === 0 ? (
-                    <p className="py-6 text-center text-sm text-[#607184]">No backups yet.</p>
+                    <p className="py-6 text-center text-sm text-[#607184]">No backups yet. Use “Back up now” to create your first one.</p>
                 ) : (
                     <ul className="divide-y divide-[#D8E0E8]">
                         {sorted.map((b) => (
                             <li key={b.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
                                 <div className="min-w-0 flex-1 basis-56">
-                                    <p className="truncate text-sm font-medium text-[#17324D]">{backupFileName(b.at, b.kind === 'safety' ? 'safety' : 'backup')}</p>
-                                    <p className="text-xs text-[#607184]">{formatStamp(b.at)} · {formatBytes(b.size)} · {kindLabel[b.kind]}</p>
+                                    <p className="truncate text-sm font-medium text-[#17324D]">{b.id}</p>
+                                    <p className="text-xs text-[#607184]">{formatStamp(b.at)} · {formatBytes(b.size)} · {kindLabel[b.kind] ?? b.kind}</p>
                                     <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs">
                                         <span className="rounded bg-[#EEF2F6] px-2 py-0.5 text-[#4A5B6E]">{b.includesFiles ? 'Records + files' : 'Records only'}</span>
                                         <span className="rounded bg-[#EEF2F6] px-2 py-0.5 text-[#4A5B6E]">{b.encrypted ? 'Password protected' : 'Not protected'}</span>
@@ -869,7 +932,7 @@ function BackupTab() {
                                     </div>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-1.5">
-                                    <Button variant="outline" size="sm" className="border-[#D8E0E8]" disabled={verifying === b.id} onClick={() => verify(b)}>
+                                    <Button variant="outline" size="sm" className="border-[#D8E0E8]" disabled={verifying === b.id} onClick={() => startVerify(b)}>
                                         {verifying === b.id ? <Loader2 className="mr-1.5 size-4 animate-spin" aria-hidden /> : <ShieldCheck className="mr-1.5 size-4" aria-hidden />}Verify
                                     </Button>
                                     <Button variant="outline" size="sm" className="border-[#D8E0E8]" onClick={() => startRestore(b)}><RotateCcw className="mr-1.5 size-4" aria-hidden />Restore</Button>
@@ -882,12 +945,39 @@ function BackupTab() {
                 <p className="mt-3 text-xs text-[#607184]">“Verify” opens the backup and checks that it is complete without changing your current data.</p>
             </Card>
 
-            {restore && <RestoreDialog key={restore.label + (restore.id ?? '')} target={restore} onClose={() => setRestore(null)} onRestored={restored} />}
+            {restore && <RestoreDialog key={restore.label + (restore.id ?? '')} target={restore} onClose={() => setRestore(null)} />}
+
+            {verifyTarget && (
+                <PasswordDialog
+                    title="Verify backup" description={verifyTarget.id} confirmLabel="Verify"
+                    error={verifyError} processing={verifying === verifyTarget.id}
+                    onSubmit={(password) => runVerify(verifyTarget, password)}
+                    onClose={() => setVerifyTarget(null)}
+                />
+            )}
+
+            {folderOpen && (
+                <FormDialog
+                    open onOpenChange={(o) => !o && setFolderOpen(false)}
+                    title="Change backup folder" description="New backups are saved here. Existing backups stay in the old folder."
+                    fields={[{ id: 'folder', label: 'Folder path', placeholder: 'C:\\Users\\you\\Documents\\PTAS Backups', hint: 'The folder is created if it does not exist.' }]}
+                    initial={{ folder: settings.folder }} submitLabel="Save folder"
+                    serverErrors={folderErrors} processing={folderBusy}
+                    onSave={(v) => router.put(R.backups(null, 'folder'), { folder: v.folder }, {
+                        preserveScroll: true,
+                        onStart: () => { setFolderBusy(true); setFolderErrors({}); },
+                        onFinish: () => setFolderBusy(false),
+                        onSuccess: () => setFolderOpen(false),
+                        onError: (errs) => setFolderErrors(errs),
+                    })}
+                />
+            )}
+
             <ConfirmDialog
                 open={!!toDelete} onOpenChange={(o) => !o && setToDelete(null)}
-                title="Delete this backup?"
+                title="Delete this backup?" processing={deleting}
                 description={toDelete ? `The backup from ${formatStamp(toDelete.at)} will be removed from your backup folder.${backups.length === 1 ? ' It is your only backup.' : ''}` : ''}
-                onConfirm={() => { setBackups((l) => l.filter((x) => x.id !== toDelete.id)); setToDelete(null); toast.success('Backup deleted.'); }}
+                onConfirm={confirmDelete}
             />
         </div>
     );
@@ -903,6 +993,9 @@ export default function Settings({
     gradeLevels = [],
     sections = [],
     subjects = [],
+    backups = [],
+    storageUsage = { database: 0, files: 0 },
+    backupSettings = { enabled: true, frequency: 'daily', keep: '10', folder: '' },
 }) {
     const { flash } = usePage().props;
     const [tab, setTab] = useState('general');
@@ -940,7 +1033,7 @@ export default function Settings({
                         sections={sections} subjects={subjects}
                     />
                 )}
-                {tab === 'backup' && <BackupTab />}
+                {tab === 'backup' && <BackupTab backups={backups} storageUsage={storageUsage} settings={backupSettings} />}
             </div>
         </AppLayout>
     );

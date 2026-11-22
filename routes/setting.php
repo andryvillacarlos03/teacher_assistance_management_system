@@ -7,6 +7,7 @@ use App\Http\Controllers\Settings\AcademicYearSetup\SectionController;
 use App\Http\Controllers\Settings\AcademicYearSetup\SubjectController;
 use App\Http\Controllers\Settings\Main\SettingsController;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Settings\Backup\BackupController;
 
 Route::middleware('auth')->group(function () {
 
@@ -48,4 +49,15 @@ Route::middleware('auth')->group(function () {
         Route::put('{subject:id}', [SubjectController::class, 'update'])->name('update');
         Route::delete('{subject:id}', [SubjectController::class, 'destroy'])->name('destroy');
     });
+
+    Route::prefix('settings/backups')->name('backups.')->group(function () {
+        Route::post('/', [BackupController::class, 'store'])->name('store');
+        Route::post('restore-upload', [BackupController::class, 'restoreUpload'])->name('restore-upload');
+        Route::put('auto', [BackupController::class, 'updateAuto'])->name('auto');
+        Route::put('folder', [BackupController::class, 'updateFolder'])->name('folder');
+        Route::post('{backup}/verify', [BackupController::class, 'verify'])->name('verify');
+        Route::post('{backup}/restore', [BackupController::class, 'restore'])->name('restore');
+        Route::delete('{backup}', [BackupController::class, 'destroy'])->name('destroy');
+    });
+    
 });
