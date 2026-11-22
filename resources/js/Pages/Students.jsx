@@ -1,8 +1,8 @@
-import { Head } from '@inertiajs/react';
+import { Head, Link, router, usePage } from '@inertiajs/react';
 import {
-    Archive, ArchiveRestore, Eye, GraduationCap, Pencil, Printer, Search, UserPlus, UserX, Users,
+    Archive, ArchiveRestore, Eye, GraduationCap, Loader2, Pencil, Printer, Search, UserPlus, UserX, Users,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -11,17 +11,25 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-    academicYears, attendanceSummary, initialEnrollments, initialStudents, sectionsByYear,
-} from '@/data/studentsSample';
 import AppLayout from '@/layouts/AppLayout';
 
 /* Theme: Navy #17324D | Teal #247A73 | Mint #E8F3F1 | Border #D8E0E8 | Gray #607184 | Danger #C65353 */
 
-/* ---------- helpers ---------- */
+/* ---------- server routes ---------- */
 
-const ACTIVE_YEAR = academicYears.find((y) => y.active)?.id ?? academicYears[0].id;
-const yearName = (id) => academicYears.find((y) => y.id === id)?.name ?? id;
+const R = {
+    list:    '/students',
+    student: (s) => (s ? `/students/${s.id}` : '/students'),
+    restore: (s) => `/students/${s.id}/restore`,
+};
+
+/* Server field name -> form field id used in the student dialog */
+const FIELD_MAP = {
+    student_number: 'studentNumber', first_name: 'firstName', middle_name: 'middleName',
+    last_name: 'lastName', suffix: 'suffix', section_id: 'section', status: 'status',
+};
+
+/* ---------- helpers ---------- */
 
 const fullName = (s) =>
     `${s.lastName}, ${s.firstName}${s.middleName ? ` ${s.middleName[0]}.` : ''}${s.suffix ? ` ${s.suffix}` : ''}`;
@@ -79,7 +87,7 @@ function Field({ id, label, hint, error, children }) {
             <Label htmlFor={id}>{label}</Label>
             {children}
             {hint && !error && <p className="text-xs text-[#607184]">{hint}</p>}
-            {error && <p className="text-sm text-[#C65353]">{error}</p>}
+            {error && <p className="text-sm text-[#C65353]" role="alert">{error}</p>}
         </div>
     );
 }
@@ -138,7 +146,7 @@ function StudentTable({ rows, handlers }) {
                                     </button>
                                 </div>
                             </td>
-                            <td className="whitespace-nowrap px-4 py-3 text-[#607184]">{r.student.studentNumber}</td>
+                            <td className="whitespace-nowrap px-4 py-3 text-[#607184]">{r.student.studentNumber ?? '—'}</td>
                             <td className="whitespace-nowrap px-4 py-3 text-[#17324D]">{r.enrollment.section}</td>
                             <td className="px-4 py-3">{r.student.archived ? <span className="text-xs font-medium text-[#607184]">Archived</span> : <StatusBadge status={r.enrollment.status} />}</td>
                             <td className="px-4 py-3 print:hidden"><div className="flex justify-end"><RowActions row={r} handlers={handlers} /></div></td>
@@ -161,7 +169,7 @@ function StudentCards({ rows, handlers }) {
                             <button type="button" onClick={() => handlers.onView(r.student)} className="text-left font-medium text-[#17324D] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#247A73]">
                                 {fullName(r.student)}
                             </button>
-                            <p className="text-xs text-[#607184]">{r.student.studentNumber} · {r.enrollment.section}</p>
+                            <p className="text-xs text-[#607184]">{r.student.studentNumber ? `${r.student.studentNumber} · ` : ''}{r.enrollment.section}</p>
                         </div>
                         {r.student.archived ? <span className="text-xs font-medium text-[#607184]">Archived</span> : <StatusBadge status={r.enrollment.status} />}
                     </div>
@@ -174,34 +182,32 @@ function StudentCards({ rows, handlers }) {
 
 /* ---------- add / edit dialog ---------- */
 
-function StudentDialog({ open, onOpenChange, initial, yearId, sectionOptions, enrollment, students, onSave }) {
+function StudentDialog({ open, onOpenChange, initial, yearLabel, sectionOptions, enrollment, onSave, serverErrors = {}, processing = false }) {
     const [form, setForm] = useState({
         studentNumber: initial?.studentNumber ?? '', firstName: initial?.firstName ?? '',
         middleName: initial?.middleName ?? '', lastName: initial?.lastName ?? '', suffix: initial?.suffix ?? '',
-        section: enrollment?.section ?? '', status: enrollment?.status ?? 'active',
+        section: enrollment?.sectionId ?? '', status: enrollment?.status ?? 'active',
     });
     const [errors, setErrors] = useState({});
     const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+    const errorFor = (k) => errors[k] ?? serverErrors[k];
 
     const submit = (e) => {
         e.preventDefault();
         const errs = {};
         if (!form.firstName.trim()) errs.firstName = 'Enter the first name.';
         if (!form.lastName.trim()) errs.lastName = 'Enter the last name.';
-        const num = form.studentNumber.trim();
-        if (!num) errs.studentNumber = 'Enter the student number.';
-        else if (students.some((s) => s.id !== initial?.id && s.studentNumber.toLowerCase() === num.toLowerCase()))
-            errs.studentNumber = 'This student number is already used.';
-        if (!initial && !form.section) errs.section = `Choose a section for S.Y. ${yearName(yearId)}.`;
+        if (!initial && !form.section) errs.section = `Choose a section for S.Y. ${yearLabel}.`;
         setErrors(errs);
         if (Object.keys(errs).length) return;
         onSave({
-            student: {
-                ...(initial ?? { id: null }),
-                studentNumber: num, firstName: form.firstName.trim(), middleName: form.middleName.trim(),
-                lastName: form.lastName.trim(), suffix: form.suffix.trim(),
-            },
-            section: form.section, status: form.status,
+            student_number: form.studentNumber.trim() || null,
+            first_name: form.firstName.trim(),
+            middle_name: form.middleName.trim() || null,
+            last_name: form.lastName.trim(),
+            suffix: form.suffix.trim() || null,
+            section_id: form.section || null,
+            status: form.status,
         });
     };
 
@@ -211,39 +217,42 @@ function StudentDialog({ open, onOpenChange, initial, yearId, sectionOptions, en
                 <DialogHeader>
                     <DialogTitle>{initial ? 'Edit student' : 'Add student'}</DialogTitle>
                     <DialogDescription className="text-[#607184]">
-                        Only the details you need for teaching. Enrollment applies to S.Y. {yearName(yearId)}.
+                        Only the details you need for teaching. Enrollment applies to S.Y. {yearLabel}.
                     </DialogDescription>
                 </DialogHeader>
 
                 <form onSubmit={submit} noValidate className="space-y-4">
-                    <Field id="s-number" label="Student number" error={errors.studentNumber}>
-                        <Input id="s-number" value={form.studentNumber} onChange={(e) => set('studentNumber', e.target.value)} placeholder="e.g. 2021-0117" className="border-[#D8E0E8]" aria-invalid={!!errors.studentNumber} />
+                    <Field id="s-number" label="Student number (optional)" hint="LRN or school ID, if you have it." error={errorFor('studentNumber')}>
+                        <Input id="s-number" value={form.studentNumber} onChange={(e) => set('studentNumber', e.target.value)} placeholder="e.g. 2021-0117" className="border-[#D8E0E8]" aria-invalid={!!errorFor('studentNumber')} />
                     </Field>
 
                     <div className="grid gap-4 sm:grid-cols-2">
-                        <Field id="s-first" label="First name" error={errors.firstName}>
-                            <Input id="s-first" value={form.firstName} onChange={(e) => set('firstName', e.target.value)} className="border-[#D8E0E8]" aria-invalid={!!errors.firstName} />
+                        <Field id="s-first" label="First name" error={errorFor('firstName')}>
+                            <Input id="s-first" value={form.firstName} onChange={(e) => set('firstName', e.target.value)} className="border-[#D8E0E8]" aria-invalid={!!errorFor('firstName')} />
                         </Field>
-                        <Field id="s-middle" label="Middle name (optional)">
+                        <Field id="s-middle" label="Middle name (optional)" error={errorFor('middleName')}>
                             <Input id="s-middle" value={form.middleName} onChange={(e) => set('middleName', e.target.value)} className="border-[#D8E0E8]" />
                         </Field>
-                        <Field id="s-last" label="Last name" error={errors.lastName}>
-                            <Input id="s-last" value={form.lastName} onChange={(e) => set('lastName', e.target.value)} className="border-[#D8E0E8]" aria-invalid={!!errors.lastName} />
+                        <Field id="s-last" label="Last name" error={errorFor('lastName')}>
+                            <Input id="s-last" value={form.lastName} onChange={(e) => set('lastName', e.target.value)} className="border-[#D8E0E8]" aria-invalid={!!errorFor('lastName')} />
                         </Field>
-                        <Field id="s-suffix" label="Suffix (optional)">
+                        <Field id="s-suffix" label="Suffix (optional)" error={errorFor('suffix')}>
                             <Input id="s-suffix" value={form.suffix} onChange={(e) => set('suffix', e.target.value)} placeholder="Jr., III" className="border-[#D8E0E8]" />
                         </Field>
                     </div>
 
                     <fieldset className="grid gap-4 rounded-md bg-[#F8FAFC] p-3 sm:grid-cols-2">
-                        <legend className="px-1 text-sm font-medium">Enrollment · S.Y. {yearName(yearId)}</legend>
-                        <Field id="s-section" label="Section" error={errors.section}>
-                            <select id="s-section" className={selectCls} value={form.section} onChange={(e) => set('section', e.target.value)}>
+                        <legend className="px-1 text-sm font-medium">Enrollment · S.Y. {yearLabel}</legend>
+                        <Field id="s-section" label="Section" error={errorFor('section')}>
+                            <select
+                                id="s-section" className={selectCls} value={form.section}
+                                onChange={(e) => set('section', e.target.value === '' ? '' : Number(e.target.value))}
+                            >
                                 <option value="">{initial ? 'Not enrolled this year' : 'Select section'}</option>
-                                {sectionOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+                                {sectionOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                             </select>
                         </Field>
-                        <Field id="s-status" label="Status">
+                        <Field id="s-status" label="Status" error={errorFor('status')}>
                             <select id="s-status" className={selectCls} value={form.status} onChange={(e) => set('status', e.target.value)} disabled={!form.section}>
                                 {Object.entries(statusStyles).map(([id, s]) => <option key={id} value={id}>{s.label}</option>)}
                             </select>
@@ -252,7 +261,9 @@ function StudentDialog({ open, onOpenChange, initial, yearId, sectionOptions, en
 
                     <DialogFooter className="gap-2 sm:gap-0">
                         <Button type="button" variant="outline" className="border-[#D8E0E8]" onClick={() => onOpenChange(false)}>Cancel</Button>
-                        <Button type="submit" className="bg-[#247A73] text-white hover:bg-[#1d6560]">{initial ? 'Save changes' : 'Add student'}</Button>
+                        <Button type="submit" disabled={processing} className="bg-[#247A73] text-white hover:bg-[#1d6560]">
+                            {processing && <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />}{initial ? 'Save changes' : 'Add student'}
+                        </Button>
                     </DialogFooter>
                 </form>
             </DialogContent>
@@ -262,13 +273,10 @@ function StudentDialog({ open, onOpenChange, initial, yearId, sectionOptions, en
 
 /* ---------- profile dialog ---------- */
 
-function ProfileDialog({ student, enrollments, yearId, onClose, onEdit, onArchive, onRestore }) {
-    const history = enrollments
-        .filter((e) => e.studentId === student.id)
-        .sort((a, b) => b.ay.localeCompare(a.ay));
-    const current = history.find((e) => e.ay === yearId);
-    const att = attendanceSummary[student.id];
-    const rate = att ? Math.round(((att.present + att.late) / (att.present + att.late + att.absent)) * 100) : null;
+function ProfileDialog({ student, history, attendance, yearId, yearLabel, isCurrentYear, onClose, onEdit, onArchive, onRestore }) {
+    const current = history.find((h) => h.yearId === yearId);
+    const total = attendance ? attendance.present + attendance.late + attendance.absent : 0;
+    const rate = total ? Math.round(((attendance.present + attendance.late) / total) * 100) : null;
 
     return (
         <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -278,7 +286,9 @@ function ProfileDialog({ student, enrollments, yearId, onClose, onEdit, onArchiv
                         <Avatar student={student} size="size-14" text="text-lg" />
                         <div className="min-w-0">
                             <DialogTitle className="leading-snug">{fullName(student)}</DialogTitle>
-                            <DialogDescription className="text-[#607184]">Student no. {student.studentNumber}</DialogDescription>
+                            <DialogDescription className="text-[#607184]">
+                                {student.studentNumber ? `Student no. ${student.studentNumber}` : 'No student number'}
+                            </DialogDescription>
                         </div>
                     </div>
                 </DialogHeader>
@@ -288,19 +298,19 @@ function ProfileDialog({ student, enrollments, yearId, onClose, onEdit, onArchiv
                 )}
 
                 <dl className="grid grid-cols-2 gap-3 rounded-md bg-[#F8FAFC] p-3 text-sm">
-                    <div><dt className="text-xs text-[#607184]">Section · S.Y. {yearName(yearId)}</dt><dd className="font-medium">{current?.section ?? 'Not enrolled'}</dd></div>
+                    <div><dt className="text-xs text-[#607184]">Section · S.Y. {yearLabel}</dt><dd className="font-medium">{current?.section ?? 'Not enrolled'}</dd></div>
                     <div><dt className="text-xs text-[#607184]">Status</dt><dd className="mt-0.5">{current ? <StatusBadge status={current.status} /> : '—'}</dd></div>
                 </dl>
 
-                {att && yearId === ACTIVE_YEAR && (
+                {rate !== null && isCurrentYear && (
                     <section>
                         <h3 className="mb-2 text-sm font-semibold">Attendance this school year</h3>
                         <div className="grid grid-cols-4 gap-2 text-center">
                             {[
                                 ['Rate', `${rate}%`, '#247A73'],
-                                ['Present', att.present, '#17324D'],
-                                ['Late', att.late, '#8A5F12'],
-                                ['Absent', att.absent, '#A63F3F'],
+                                ['Present', attendance.present, '#17324D'],
+                                ['Late', attendance.late, '#8A5F12'],
+                                ['Absent', attendance.absent, '#A63F3F'],
                             ].map(([label, value, color]) => (
                                 <div key={label} className="rounded-md border border-[#D8E0E8] p-2">
                                     <p className="text-lg font-semibold" style={{ color }}>{value}</p>
@@ -321,7 +331,7 @@ function ProfileDialog({ student, enrollments, yearId, onClose, onEdit, onArchiv
                                 <li key={h.id} className="relative flex flex-wrap items-center justify-between gap-2">
                                     <span className="absolute -left-[22px] top-1.5 size-2.5 rounded-full border-2 border-white bg-[#247A73]" aria-hidden />
                                     <div>
-                                        <p className="text-sm font-medium">S.Y. {yearName(h.ay)}</p>
+                                        <p className="text-sm font-medium">S.Y. {h.yearName}</p>
                                         <p className="text-xs text-[#607184]">{h.section}</p>
                                     </div>
                                     <StatusBadge status={h.status} />
@@ -354,36 +364,55 @@ function ProfileDialog({ student, enrollments, yearId, onClose, onEdit, onArchiv
 
 /* ---------- page ---------- */
 
-export default function Students() {
-    const [students, setStudents] = useState(initialStudents);
-    const [enrollments, setEnrollments] = useState(initialEnrollments);
-    const [yearId, setYearId] = useState(ACTIVE_YEAR);
+/**
+ * Props from StudentController@index:
+ *  academicYears: [{ id, name, active }]
+ *  yearId:        the selected school year (or null if none exist)
+ *  sections:      [{ id, name }]  sections of the selected year, e.g. "Grade 4 – Mabini"
+ *  rows:          [{ student: {...}, enrollment: { id, sectionId, section, status } }]
+ *  history:       { [studentId]: [{ id, yearId, yearName, section, status }] }
+ *  attendance:    { [studentId]: { present, late, absent } }   (optional, Attendance module)
+ */
+export default function Students({
+    academicYears = [],
+    yearId = null,
+    sections = [],
+    rows: yearRows = [],
+    history = {},
+    attendance = {},
+}) {
+    const { flash } = usePage().props;
+
     const [search, setSearch] = useState('');
     const [status, setStatus] = useState('all');
     const [section, setSection] = useState('all');
     const [form, setForm] = useState({ open: false, student: null, key: 0 });
+    const [serverErrors, setServerErrors] = useState({});
     const [viewId, setViewId] = useState(null);
     const [toArchive, setToArchive] = useState(null);
+    const [busy, setBusy] = useState(false);
 
-    const sectionOptions = sectionsByYear[yearId] ?? [];
-    const enrollmentOf = (studentId, ay = yearId) => enrollments.find((e) => e.studentId === studentId && e.ay === ay);
+    // Success and warning messages from the server (back()->with('success', ...)).
+    useEffect(() => {
+        if (flash?.success) toast.success(flash.success);
+        if (flash?.warning) toast.warning(flash.warning);
+    }, [flash]);
 
-    // Students enrolled in the selected school year
-    const yearRows = useMemo(
-        () =>
-            students
-                .map((s) => ({ student: s, enrollment: enrollments.find((e) => e.studentId === s.id && e.ay === yearId) }))
-                .filter((r) => r.enrollment),
-        [students, enrollments, yearId],
-    );
+    const activeId = academicYears.find((y) => y.active)?.id ?? null;
+    const yearLabel = academicYears.find((y) => y.id === yearId)?.name ?? '';
+    const isPastYear = yearId !== null && yearId !== activeId;
+    const canAdd = yearId !== null && sections.length > 0;
 
     const rows = useMemo(() => {
         const q = search.trim().toLowerCase();
         return yearRows
             .filter((r) => (status === 'archived' ? r.student.archived : !r.student.archived))
             .filter((r) => status === 'all' || status === 'archived' || r.enrollment.status === status)
-            .filter((r) => section === 'all' || r.enrollment.section === section)
-            .filter((r) => !q || fullName(r.student).toLowerCase().includes(q) || `${r.student.firstName} ${r.student.lastName}`.toLowerCase().includes(q) || r.student.studentNumber.toLowerCase().includes(q))
+            .filter((r) => section === 'all' || r.enrollment.sectionId === section)
+            .filter((r) => !q
+                || fullName(r.student).toLowerCase().includes(q)
+                || `${r.student.firstName} ${r.student.lastName}`.toLowerCase().includes(q)
+                || (r.student.studentNumber ?? '').toLowerCase().includes(q))
             .sort((a, b) => fullName(a.student).localeCompare(fullName(b.student)));
     }, [yearRows, status, section, search]);
 
@@ -397,49 +426,63 @@ export default function Students() {
     const hasFilters = search || status !== 'all' || section !== 'all';
     const clear = () => { setSearch(''); setStatus('all'); setSection('all'); };
 
-    const changeYear = (id) => { setYearId(id); setSection('all'); };
+    const reqOpts = (extra = {}) => ({
+        preserveScroll: true,
+        onStart: () => setBusy(true),
+        onFinish: () => setBusy(false),
+        ...extra,
+    });
+
+    const changeYear = (id) => {
+        setSection('all');
+        router.get(R.list, { year: id }, {
+            preserveState: true, preserveScroll: true,
+            only: ['yearId', 'sections', 'rows', 'history', 'attendance'],
+        });
+    };
+
+    const restoreStudent = (s) => router.patch(R.restore(s), {}, reqOpts());
 
     const handlers = {
         onView: (s) => setViewId(s.id),
-        onEdit: (s) => { setViewId(null); setForm((f) => ({ open: true, student: s, key: f.key + 1 })); },
+        onEdit: (s) => { setViewId(null); setServerErrors({}); setForm((f) => ({ open: true, student: s, key: f.key + 1 })); },
         onArchive: (s) => { setViewId(null); setToArchive(s); },
-        onRestore: (s) => {
-            setStudents((list) => list.map((x) => (x.id === s.id ? { ...x, archived: false } : x)));
-            toast.success(`${fullName(s)} restored.`);
-        },
+        onRestore: restoreStudent,
     };
-    const openAdd = () => setForm((f) => ({ open: true, student: null, key: f.key + 1 }));
+    const openAdd = () => { setServerErrors({}); setForm((f) => ({ open: true, student: null, key: f.key + 1 })); };
 
-    const save = ({ student, section: sec, status: st }) => {
-        let id = student.id;
-        if (id === null) {
-            id = Date.now();
-            setStudents((list) => [...list, { ...student, id }]);
-        } else {
-            setStudents((list) => list.map((x) => (x.id === id ? student : x)));
-        }
-        setEnrollments((list) => {
-            const others = list.filter((e) => !(e.studentId === id && e.ay === yearId));
-            if (!sec) return others; // not enrolled this year
-            const existing = list.find((e) => e.studentId === id && e.ay === yearId);
-            return [...others, { id: existing?.id ?? Date.now() + 1, studentId: id, ay: yearId, section: sec, status: st }];
+    const save = (data) => {
+        setServerErrors({});
+        const payload = { ...data, academic_year_id: yearId };
+        const opts = reqOpts({
+            onSuccess: () => setForm((f) => ({ ...f, open: false })),
+            onError: (errs) => {
+                const mapped = {};
+                const rest = [];
+                Object.entries(errs).forEach(([key, msg]) => {
+                    if (FIELD_MAP[key]) mapped[FIELD_MAP[key]] = msg; else rest.push(msg);
+                });
+                setServerErrors(mapped);
+                if (rest.length) toast.error(rest[0]);
+            },
         });
-        setForm((f) => ({ ...f, open: false }));
-        toast.success(student.id === null ? 'Student added.' : 'Student saved.');
+        if (form.student) router.put(R.student(form.student), payload, opts);
+        else router.post(R.student(), payload, opts);
     };
 
     const confirmArchive = () => {
         const s = toArchive;
-        setStudents((list) => list.map((x) => (x.id === s.id ? { ...x, archived: true } : x)));
-        setToArchive(null);
-        toast.success(`${fullName(s)} archived.`, {
-            action: { label: 'Undo', onClick: () => setStudents((list) => list.map((x) => (x.id === s.id ? { ...x, archived: false } : x))) },
-        });
+        router.delete(R.student(s), reqOpts({
+            onSuccess: () => {
+                setToArchive(null);
+                toast('You can restore this student any time.', { action: { label: 'Undo', onClick: () => restoreStudent(s) } });
+            },
+            onError: () => { setToArchive(null); toast.error('The student could not be archived.'); },
+        }));
     };
 
-    const viewing = students.find((s) => s.id === viewId) ?? null;
-    const editingEnrollment = form.student ? enrollmentOf(form.student.id) : null;
-    const isPastYear = yearId !== ACTIVE_YEAR;
+    const viewing = yearRows.find((r) => r.student.id === viewId)?.student ?? null;
+    const editingEnrollment = form.student ? yearRows.find((r) => r.student.id === form.student.id)?.enrollment ?? null : null;
 
     const chip = (id, label, count) => (
         <button
@@ -452,6 +495,8 @@ export default function Students() {
         </button>
     );
 
+    const sectionName = section === 'all' ? null : sections.find((s) => s.id === section)?.name;
+
     return (
         <AppLayout
             title="Students"
@@ -461,7 +506,7 @@ export default function Students() {
                     <Button variant="outline" onClick={() => window.print()} className="border-[#D8E0E8] bg-white text-[#17324D] hover:bg-[#E8F3F1] print:hidden">
                         <Printer className="mr-2 size-4" aria-hidden />Print list
                     </Button>
-                    <Button onClick={openAdd} className="bg-[#247A73] text-white hover:bg-[#1d6560] print:hidden">
+                    <Button onClick={openAdd} disabled={!canAdd} className="bg-[#247A73] text-white hover:bg-[#1d6560] print:hidden">
                         <UserPlus className="mr-2 size-4" aria-hidden />Add student
                     </Button>
                 </>
@@ -472,94 +517,115 @@ export default function Students() {
             {/* Print-only heading */}
             <div className="mb-4 hidden print:block">
                 <h2 className="text-xl font-semibold text-[#17324D]">Class List</h2>
-                <p className="text-sm text-[#607184]">S.Y. {yearName(yearId)}{section !== 'all' ? ` · ${section}` : ''} · {rows.length} students</p>
+                <p className="text-sm text-[#607184]">S.Y. {yearLabel}{sectionName ? ` · ${sectionName}` : ''} · {rows.length} students</p>
             </div>
 
-            <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-3 xl:grid-cols-4 print:hidden">
-                    <StatTile icon={Users} label="Enrolled" value={counts.enrolled} hint={`S.Y. ${yearName(yearId)}`} />
-                    <StatTile icon={GraduationCap} label="Active" value={counts.active} hint="Currently attending" tone="#1F6B4B" toneBg="#E3F3EA" />
-                    <StatTile icon={UserX} label="Inactive or transferred" value={counts.away} hint="Kept for records" tone="#8A5F12" toneBg="#FBF1DB" />
-                    <StatTile icon={Archive} label="Archived" value={counts.archived} hint="Hidden from lists" tone="#4A5B6E" toneBg="#EEF2F6" />
+            {academicYears.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-[#D8E0E8] bg-white p-10 text-center">
+                    <GraduationCap className="mx-auto size-8 text-[#607184]" aria-hidden />
+                    <p className="mt-2 font-medium text-[#17324D]">Set up a school year first</p>
+                    <p className="mt-1 text-sm text-[#607184]">Students are enrolled in a section for each school year. Add a school year, grade level and section in Settings.</p>
+                    <Button asChild className="mt-4 bg-[#247A73] text-white hover:bg-[#1d6560]"><Link href="/settings">Open Settings</Link></Button>
                 </div>
-
-                {isPastYear && (
-                    <p className="rounded-md border border-[#E6B85C] bg-[#FBF1DB] px-3 py-2 text-sm text-[#6F4B0E] print:hidden">
-                        You are viewing a past school year. Records are kept for history.
-                    </p>
-                )}
-
-                <div className="flex flex-wrap items-center gap-3 print:hidden">
-                    <div className="w-full sm:w-44">
-                        <label htmlFor="st-year" className="sr-only">School year</label>
-                        <select id="st-year" className={selectCls} value={yearId} onChange={(e) => changeYear(e.target.value)}>
-                            {academicYears.map((y) => <option key={y.id} value={y.id}>S.Y. {y.name}{y.active ? ' (current)' : ''}</option>)}
-                        </select>
+            ) : (
+                <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4 print:hidden">
+                        <StatTile icon={Users} label="Enrolled" value={counts.enrolled} hint={`S.Y. ${yearLabel}`} />
+                        <StatTile icon={GraduationCap} label="Active" value={counts.active} hint="Currently attending" tone="#1F6B4B" toneBg="#E3F3EA" />
+                        <StatTile icon={UserX} label="Inactive or transferred" value={counts.away} hint="Kept for records" tone="#8A5F12" toneBg="#FBF1DB" />
+                        <StatTile icon={Archive} label="Archived" value={counts.archived} hint="Hidden from lists" tone="#4A5B6E" toneBg="#EEF2F6" />
                     </div>
-                    <div className="relative w-full sm:w-64">
-                        <Label htmlFor="st-search" className="sr-only">Search students</Label>
-                        <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-[#607184]" aria-hidden />
-                        <Input id="st-search" placeholder="Search name or student no." value={search} onChange={(e) => setSearch(e.target.value)} className="border-[#D8E0E8] bg-white pl-9" />
-                    </div>
-                    <div className="w-full sm:w-40">
-                        <label htmlFor="st-status" className="sr-only">Status</label>
-                        <select id="st-status" className={selectCls} value={status} onChange={(e) => setStatus(e.target.value)}>
-                            <option value="all">All students</option>
-                            <option value="active">Active</option>
-                            <option value="inactive">Inactive</option>
-                            <option value="transferred">Transferred</option>
-                            <option value="archived">Archived</option>
-                        </select>
-                    </div>
-                </div>
 
-                <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 print:hidden" role="group" aria-label="Section">
-                    {chip('all', 'All sections', live.length)}
-                    {sectionOptions.map((s) => chip(s, s, live.filter((r) => r.enrollment.section === s).length))}
-                </div>
+                    {isPastYear && (
+                        <p className="rounded-md border border-[#E6B85C] bg-[#FBF1DB] px-3 py-2 text-sm text-[#6F4B0E] print:hidden">
+                            You are viewing a past school year. Records are kept for history.
+                        </p>
+                    )}
 
-                <p className="text-sm text-[#607184] print:hidden" aria-live="polite">Showing {rows.length} of {yearRows.length} students</p>
+                    {yearId !== null && sections.length === 0 && (
+                        <p className="rounded-md border border-[#E6B85C] bg-[#FBF1DB] px-3 py-2 text-sm text-[#6F4B0E] print:hidden">
+                            S.Y. {yearLabel} has no sections yet. Add a section in <Link href="/settings" className="font-medium underline">Settings</Link> before adding students.
+                        </p>
+                    )}
 
-                {rows.length === 0 ? (
-                    <div className="rounded-lg border border-dashed border-[#D8E0E8] bg-white p-10 text-center">
-                        <Users className="mx-auto size-8 text-[#607184]" aria-hidden />
-                        <p className="mt-2 font-medium text-[#17324D]">{yearRows.length === 0 ? `No students in S.Y. ${yearName(yearId)}` : 'No students match your search'}</p>
-                        <p className="mt-1 text-sm text-[#607184]">{yearRows.length === 0 ? 'Add a student to start this school year’s class list.' : 'Try another name or clear the filters.'}</p>
-                        <div className="mt-4 flex justify-center gap-2">
-                            {hasFilters && <Button variant="outline" className="border-[#D8E0E8]" onClick={clear}>Clear filters</Button>}
-                            <Button onClick={openAdd} className="bg-[#247A73] text-white hover:bg-[#1d6560]"><UserPlus className="mr-2 size-4" aria-hidden />Add student</Button>
+                    <div className="flex flex-wrap items-center gap-3 print:hidden">
+                        <div className="w-full sm:w-44">
+                            <label htmlFor="st-year" className="sr-only">School year</label>
+                            <select id="st-year" className={selectCls} value={yearId ?? ''} onChange={(e) => changeYear(Number(e.target.value))}>
+                                {academicYears.map((y) => <option key={y.id} value={y.id}>S.Y. {y.name}{y.active ? ' (current)' : ''}</option>)}
+                            </select>
+                        </div>
+                        <div className="relative w-full sm:w-64">
+                            <Label htmlFor="st-search" className="sr-only">Search students</Label>
+                            <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-[#607184]" aria-hidden />
+                            <Input id="st-search" placeholder="Search name or student no." value={search} onChange={(e) => setSearch(e.target.value)} className="border-[#D8E0E8] bg-white pl-9" />
+                        </div>
+                        <div className="w-full sm:w-40">
+                            <label htmlFor="st-status" className="sr-only">Status</label>
+                            <select id="st-status" className={selectCls} value={status} onChange={(e) => setStatus(e.target.value)}>
+                                <option value="all">All students</option>
+                                <option value="active">Active</option>
+                                <option value="inactive">Inactive</option>
+                                <option value="transferred">Transferred</option>
+                                <option value="archived">Archived</option>
+                            </select>
                         </div>
                     </div>
-                ) : (
-                    <>
-                        <StudentTable rows={rows} handlers={handlers} />
-                        <StudentCards rows={rows} handlers={handlers} />
-                    </>
-                )}
-            </div>
 
-            <StudentDialog
-                key={form.key}
-                open={form.open}
-                onOpenChange={(open) => setForm((f) => ({ ...f, open }))}
-                initial={form.student}
-                yearId={yearId}
-                sectionOptions={sectionOptions}
-                enrollment={editingEnrollment}
-                students={students}
-                onSave={save}
-            />
+                    <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 print:hidden" role="group" aria-label="Section">
+                        {chip('all', 'All sections', live.length)}
+                        {sections.map((s) => chip(s.id, s.name, live.filter((r) => r.enrollment.sectionId === s.id).length))}
+                    </div>
+
+                    <p className="text-sm text-[#607184] print:hidden" aria-live="polite">Showing {rows.length} of {yearRows.length} students</p>
+
+                    {rows.length === 0 ? (
+                        <div className="rounded-lg border border-dashed border-[#D8E0E8] bg-white p-10 text-center">
+                            <Users className="mx-auto size-8 text-[#607184]" aria-hidden />
+                            <p className="mt-2 font-medium text-[#17324D]">{yearRows.length === 0 ? `No students in S.Y. ${yearLabel}` : 'No students match your search'}</p>
+                            <p className="mt-1 text-sm text-[#607184]">{yearRows.length === 0 ? 'Add a student to start this school year’s class list.' : 'Try another name or clear the filters.'}</p>
+                            <div className="mt-4 flex justify-center gap-2">
+                                {hasFilters && <Button variant="outline" className="border-[#D8E0E8]" onClick={clear}>Clear filters</Button>}
+                                {canAdd && <Button onClick={openAdd} className="bg-[#247A73] text-white hover:bg-[#1d6560]"><UserPlus className="mr-2 size-4" aria-hidden />Add student</Button>}
+                            </div>
+                        </div>
+                    ) : (
+                        <>
+                            <StudentTable rows={rows} handlers={handlers} />
+                            <StudentCards rows={rows} handlers={handlers} />
+                        </>
+                    )}
+                </div>
+            )}
+
+            {form.open && (
+                <StudentDialog
+                    key={form.key}
+                    open
+                    onOpenChange={(open) => setForm((f) => ({ ...f, open }))}
+                    initial={form.student}
+                    yearLabel={yearLabel}
+                    sectionOptions={sections}
+                    enrollment={editingEnrollment}
+                    onSave={save}
+                    serverErrors={serverErrors}
+                    processing={busy}
+                />
+            )}
 
             {viewing && (
                 <ProfileDialog
                     key={viewing.id}
                     student={viewing}
-                    enrollments={enrollments}
+                    history={history[viewing.id] ?? []}
+                    attendance={attendance[viewing.id]}
                     yearId={yearId}
+                    yearLabel={yearLabel}
+                    isCurrentYear={yearId === activeId}
                     onClose={() => setViewId(null)}
                     onEdit={handlers.onEdit}
                     onArchive={handlers.onArchive}
-                    onRestore={(s) => { handlers.onRestore(s); }}
+                    onRestore={restoreStudent}
                 />
             )}
 
@@ -573,7 +639,9 @@ export default function Students() {
                     </DialogHeader>
                     <DialogFooter className="gap-2 sm:gap-0">
                         <Button variant="outline" className="border-[#D8E0E8]" onClick={() => setToArchive(null)}>Cancel</Button>
-                        <Button onClick={confirmArchive} className="bg-[#C65353] text-white hover:bg-[#b04545]">Archive</Button>
+                        <Button onClick={confirmArchive} disabled={busy} className="bg-[#C65353] text-white hover:bg-[#b04545]">
+                            {busy && <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />}Archive
+                        </Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
